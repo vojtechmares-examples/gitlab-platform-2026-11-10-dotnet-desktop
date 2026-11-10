@@ -108,7 +108,7 @@ proxy:feasibility:
       docker image inspect "$CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/dotnet/sdk:10.0" >/dev/null 2>&1 \
         && echo "RESULT: served by the proxy" || echo "RESULT: not available through the Dependency Proxy; the jobs use mcr.microsoft.com directly"
 
-# One job per target system. The version is the tag without the "v", or 1.0.0-dev.<pipeline id> for other commits.
+# One job per target system. Debug symbols (.pdb, some of them tens of megabytes from third-party packages) are left out of the archives. The version is the tag without the "v", or 1.0.0-dev.<pipeline id> for other commits.
 build:
   stage: build
   image: mcr.microsoft.com/dotnet/sdk:10.0
@@ -132,8 +132,8 @@ build:
     - |
       NAME="HelloDesktop-$VERSION-$RID"
       case "$RID" in
-        win-*) apt-get update -qq && apt-get install -y -qq zip >/dev/null && (cd out/$RID && zip -q -r "$CI_PROJECT_DIR/dist/$NAME.zip" .) ;;
-        *)     tar -C out/$RID -czf "dist/$NAME.tar.gz" . ;;
+        win-*) apt-get update -qq && apt-get install -y -qq zip >/dev/null && (cd out/$RID && zip -q -r "$CI_PROJECT_DIR/dist/$NAME.zip" . -x '*.pdb') ;;
+        *)     tar --exclude='*.pdb' -C out/$RID -czf "dist/$NAME.tar.gz" . ;;
       esac
     - ls -la dist
   artifacts:
