@@ -7,7 +7,7 @@ entirely on the Linux runner.
 |-------|-----|
 | Code | `HelloDesktop.Core` (logic and view model, no UI types), `HelloDesktop` (the Avalonia window), `HelloDesktop.Tests` (xUnit) |
 | **CI matrix, platforms** | the `build` job runs once per runtime: `win-x64`, `osx-arm64`, `osx-x64`, `linux-x64`. .NET publishes for another system by downloading its runtime pack, so no Windows or Mac machine is involved. Output: a self-contained single file, as `.zip` (Windows) or `.tar.gz` |
-| **CI matrix, .NET versions** | the `test` job runs on `mcr.microsoft.com/dotnet/sdk:9.0` and `:10.0`; the projects take their target framework from `-p:TargetFramework=net9.0` / `net10.0` |
+| **CI matrix, .NET versions** | the `test` job runs on `mcr.microsoft.com/dotnet/sdk:9.0` and `:10.0`; the projects take their target framework from `-p:DotnetTfm=net9.0` / `net10.0` (a custom property, because MSBuild does not pass `TargetFramework` on to referenced projects) |
 | Coverage | coverlet + ReportGenerator; percentage on the job, Cobertura in merge requests, HTML report as an artifact |
 | Security | Trivy through the Dependency Proxy scans the NuGet lock files |
 | **Dependency Proxy** | used for the Docker Hub images (Trivy, `docker`, `docker:dind`). It cannot serve the .NET SDK: Microsoft publishes it on `mcr.microsoft.com`, the proxy caches Docker Hub only. The manual job `proxy:feasibility` tries both and shows the result |

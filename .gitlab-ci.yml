@@ -26,7 +26,7 @@ variables:
   NUGET_PACKAGES: "$CI_PROJECT_DIR/.nuget"
 
 # The tests run once per .NET version. The SDK image of the matching version supplies the runtime; the projects take
-# their target framework from the command line (-p:TargetFramework=net9.0), so one code base is tested on both.
+# their target framework from a property on the command line (-p:DotnetTfm=net9.0), so one code base is tested on both.
 test:
   stage: test
   parallel:
@@ -38,7 +38,7 @@ test:
     paths: [.nuget/]
   script:
     - >
-      dotnet test tests/HelloDesktop.Tests -c Release -p:TargetFramework=net$DOTNET_VERSION
+      dotnet test tests/HelloDesktop.Tests -c Release -p:DotnetTfm=net$DOTNET_VERSION
       --settings coverlet.runsettings --collect:"XPlat Code Coverage" --results-directory TestResults
       --logger "junit;LogFilePath=$CI_PROJECT_DIR/TestResults/junit-$DOTNET_VERSION.xml"
     - dotnet tool restore
