@@ -1,0 +1,16 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:core="using:HelloDesktop.Core"
+        x:Class="HelloDesktop.MainWindow"
+        x:DataType="core:GreetingViewModel"
+        Title="HelloDesktop" Width="460" Height="260" CanResize="False"
+        WindowStartupLocation="CenterScreen">
+  <StackPanel Margin="24" Spacing="12">
+    <TextBlock Text="HelloDesktop" FontSize="24" FontWeight="SemiBold" />
+    <TextBox PlaceholderText="Your name" Text="{Binding Name}" />
+    <Button Content="Greet" Click="OnGreet" />
+    <TextBlock Text="{Binding Greeting}" FontSize="18" TextWrapping="Wrap" />
+    <TextBlock Text="{Binding Greetings, StringFormat='Greetings so far: {0}'}" Opacity="0.7" />
+    <TextBlock Text="{Binding Platform}" Opacity="0.55" FontSize="12" TextWrapping="Wrap" />
+  </StackPanel>
+</Window>

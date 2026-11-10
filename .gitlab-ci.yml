@@ -1,0 +1,191 @@
+# Cross-platform .NET desktop application (Avalonia) for Windows, macOS and Linux. Every job runs on the Linux runner:
+# .NET publishes for another operating system by downloading its runtime pack, no Windows or Mac machine is needed.
+#   test      matrix over .NET 9 and .NET 10, code coverage
+#   security  Trivy on the repository (NuGet lock files)
+#   build     matrix over runtimes (win-x64, osx-arm64, osx-x64, linux-x64): self-contained single file, zip or tar.gz
+#   staging   main: upload the builds to the package registry as a pre-release channel
+#   release   tag v1.2.3: the same files are attached to a GitLab Release (production)
+
+include:
+  - project: examples/ci-templates
+    ref: main
+    file: /rocky.yml
+
+stages: [test, security, build, staging, production]
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  NUGET_PACKAGES: "$CI_PROJECT_DIR/.nuget"
+
+# The tests run once per .NET version. The SDK image of the matching version supplies the runtime; the projects take
+# their target framework from the command line (-p:TargetFramework=net9.0), so one code base is tested on both.
+test:
+  stage: test
+  parallel:
+    matrix:
+      - DOTNET_VERSION: ["9.0", "10.0"]
+  image: mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION
+  cache:
+    key: nuget-$DOTNET_VERSION
+    paths: [.nuget/]
+  script:
+    - >
+      dotnet test tests/HelloDesktop.Tests -c Release -p:TargetFramework=net$DOTNET_VERSION
+      --settings coverlet.runsettings --collect:"XPlat Code Coverage" --results-directory TestResults
+      --logger "junit;LogFilePath=$CI_PROJECT_DIR/TestResults/junit-$DOTNET_VERSION.xml"
+    - dotnet tool restore
+    - dotnet reportgenerator -reports:"TestResults/*/coverage.cobertura.xml" -targetdir:coverage-$DOTNET_VERSION -reporttypes:"TextSummary;Html;Cobertura"
+    - cat coverage-$DOTNET_VERSION/Summary.txt
+  coverage: '/Line coverage: (\d+\.?\d*)%/'
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - coverage-$DOTNET_VERSION/
+    reports:
+      junit: TestResults/junit-*.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage-$DOTNET_VERSION/Cobertura.xml
+
+# Trivy through the Dependency Proxy (Docker Hub images)
+trivy:repository:
+  stage: security
+  needs: []
+  image:
+    name: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/aquasec/trivy:0.76.2
+    entrypoint: [""]
+  variables:
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivycache"
+    TRIVY_DB_REPOSITORY: "public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2"
+    TRIVY_NO_PROGRESS: "true"
+  cache:
+    key: trivy
+    paths: [.trivycache/]
+  script:
+    - trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --format json --output trivy-repository.json .
+    - trivy convert --format table trivy-repository.json
+    - trivy convert --severity CRITICAL --exit-code 1 --format table trivy-repository.json > /dev/null
+  allow_failure: true
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths: [trivy-repository.json]
+
+# "Can the Dependency Proxy serve the .NET SDK image?" The proxy caches Docker Hub only, and Microsoft publishes the
+# .NET images to mcr.microsoft.com, so the answer is no. This manual job tries both and prints the result.
+proxy:feasibility:
+  stage: security
+  needs: []
+  image: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/docker:29
+  services:
+    - name: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/docker:29-dind
+      alias: docker
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  script:
+    - echo "$CI_DEPENDENCY_PROXY_PASSWORD" | docker login -u "$CI_DEPENDENCY_PROXY_USER" --password-stdin "$CI_DEPENDENCY_PROXY_SERVER"
+    - echo "--- an image from Docker Hub:"
+    - docker pull "$CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/alpine:3.22" | tail -2
+    - echo "--- the .NET SDK (published on mcr.microsoft.com, not on Docker Hub):"
+    - |
+      if docker pull "$CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/dotnet/sdk:10.0" 2>&1 | tail -3; then :; fi
+      docker image inspect "$CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/dotnet/sdk:10.0" >/dev/null 2>&1 \
+        && echo "RESULT: served by the proxy" || echo "RESULT: not available through the Dependency Proxy; the jobs use mcr.microsoft.com directly"
+
+# One job per target system. The version is the tag without the "v", or 1.0.0-dev.<pipeline id> for other commits.
+build:
+  stage: build
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  needs: [test]
+  parallel:
+    matrix:
+      - RID: [win-x64, osx-arm64, osx-x64, linux-x64]
+  cache:
+    key: nuget-build
+    paths: [.nuget/]
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - if [ -n "$CI_COMMIT_TAG" ]; then VERSION="${CI_COMMIT_TAG#v}"; else VERSION="1.0.0-dev.$CI_PIPELINE_ID"; fi
+    - >
+      dotnet publish src/HelloDesktop/HelloDesktop.csproj -c Release -r $RID --self-contained
+      -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
+      -p:DebugType=none -p:Version=$VERSION -o out/$RID
+    - mkdir -p dist
+    - |
+      NAME="HelloDesktop-$VERSION-$RID"
+      case "$RID" in
+        win-*) apt-get update -qq && apt-get install -y -qq zip >/dev/null && (cd out/$RID && zip -q -r "$CI_PROJECT_DIR/dist/$NAME.zip" .) ;;
+        *)     tar -C out/$RID -czf "dist/$NAME.tar.gz" . ;;
+      esac
+    - ls -la dist
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
+
+# Both publishing jobs only need curl and jq: Rocky Linux
+.publish:
+  image: rockylinux/rockylinux:10
+  before_script:
+    - !reference [.rocky-dnf, before_script]
+    - dnf -y -q install jq
+  variables:
+    GENERIC: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hello-desktop"
+
+# main: every build goes to the registry under a pre-release version (the "staging" channel)
+publish:staging:
+  extends: .publish
+  stage: staging
+  needs: [build]
+  environment:
+    name: staging
+    url: $CI_PROJECT_URL/-/packages
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - VERSION="1.0.0-dev.$CI_PIPELINE_ID"
+    - |
+      for f in dist/*; do
+        curl --fail-with-body -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$GENERIC/$VERSION/$(basename "$f")" && echo " uploaded $(basename "$f")"
+      done
+
+# tag: the same files go to the registry under the release version and are attached to a GitLab Release
+release:production:
+  extends: .publish
+  stage: production
+  needs: [build]
+  environment:
+    name: production
+    url: $CI_PROJECT_URL/-/releases
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - (cd dist && sha256sum * > SHA256SUMS)
+    - |
+      for f in dist/*; do
+        curl --fail-with-body -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$GENERIC/$VERSION/$(basename "$f")" && echo " uploaded $(basename "$f")"
+      done
+    - |
+      links=$(for f in dist/*; do jq -n --arg name "$(basename "$f")" --arg url "$GENERIC/$VERSION/$(basename "$f")" '{name: $name, url: $url, link_type: "package"}'; done | jq -s .)
+      jq -n --arg tag "$CI_COMMIT_TAG" --arg name "HelloDesktop $VERSION" --argjson links "$links" \
+        --arg notes "Self-contained builds for Windows, macOS (Apple silicon and Intel) and Linux. The files are not code-signed. Checksums are in SHA256SUMS." \
+        '{tag_name: $tag, name: $name, description: $notes, assets: {links: $links}}' > release.json
+      curl --fail-with-body -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" --header "Content-Type: application/json" --data @release.json "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases" | jq '{tag_name, name, assets: [.assets.links[].name]}'

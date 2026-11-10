@@ -1,0 +1,10 @@
+bin/
+obj/
+out/
+TestResults/
+coverage/
+.nuget/
+.trivycache/
+*.user
+.vs/
+.idea/
