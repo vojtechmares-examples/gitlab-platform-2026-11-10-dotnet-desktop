@@ -17,3 +17,12 @@ entirely on the Linux runner.
 The binaries are not code-signed or notarized (a Windows certificate and an Apple developer account are needed for that).
 
 Release: `git tag -a v1.0.0 -m "HelloDesktop 1.0.0" && git push origin v1.0.0`.
+
+## CI configuration
+
+This pipeline needs **no CI/CD variables** of its own and does not use the deploy server. It works with the variables GitLab predefines:
+
+| Variable | Used for |
+|----------|----------|
+| `CI_JOB_TOKEN` | `publish:staging` and `release:production` upload the builds to the Generic Package Registry and create the GitLab Release of the tag |
+| `CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX` (and, in `proxy:feasibility`, `CI_DEPENDENCY_PROXY_USER`, `CI_DEPENDENCY_PROXY_PASSWORD`, `CI_DEPENDENCY_PROXY_SERVER`) | Pull the Trivy and `docker` images from Docker Hub through the group's Dependency Proxy |
